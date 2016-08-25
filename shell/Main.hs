@@ -1,3 +1,5 @@
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ExtendedDefaultRules #-}
@@ -9,6 +11,7 @@ import Development.Shake.Util
 import Data.List
 import Data.Traversable
 import Text.Printf
+import Control.Monad
 
 -- preEddy
 --path=${StudyFolder} \ - Path to subject's data folder
@@ -51,6 +54,11 @@ numDirs dwi = read . trim . fromStdout <$> command [] "fslval" [dwi, "dim4"]
 data DWI = PE1 { filepath :: FilePath } | PE2 { filepath:: FilePath }
   deriving Show
 
+data Dir = Dir Double Double Double
+
+instance Show Dir where
+  show (Dir v1 v2 v3) = printf "%f %f %f" v1 v2 v3
+
 phaseLength :: DWI -> Action PhaseLength
 phaseLength (PE1 dwi) = read . fromStdout <$> command [] "fslval" [dwi, "dim1"]
 phaseLength (PE2 dwi) = read . fromStdout <$> command [] "fslval" [dwi, "dim2"]
@@ -65,15 +73,21 @@ readoutTime l echo = (echo * numPEsteps) / 1000
 toCSV :: Show a => [[a]] -> String
 toCSV d = intercalate "\n" (intercalate "," . map show <$> d)
 
+replaceExtension' :: FilePath -> String -> FilePath
+replaceExtension' f ext = replaceExtension (dropExtension f) ext
+
 extractVol :: DWI -> Int -> Action FilePath
 extractVol dwi idx
   = outPath <$ (cmd :: Action ())
     where
       cmd = command [] "fslroi" [filepath dwi, outPath, show idx, show 1]
-      outPath = replaceExtensions (filepath dwi) (printf "b0-%04d.nii.gz" idx)
+      outPath = replaceExtension' (filepath dwi) (printf "b0-%04d.nii.gz" idx)
 
-readArrayFile :: FilePath -> Action [Int]
-readArrayFile bval = map read <$> words <$> readFile' bval
+readbval :: FilePath -> Action [Int]
+readbval f = map read <$> words <$> readFile' f
+
+writebval :: FilePath -> [Int] -> Action ()
+writebval out arr = writeFile' out (unwords . map show $ arr)
 
 extractB0s :: DWI -> [Int] -> Int -> Action [FilePath]
 extractB0s dwi bValues b0max =
@@ -81,13 +95,49 @@ extractB0s dwi bValues b0max =
   where
     b0indices = findIndices (< b0max) bValues
 
-mergeB0s :: FilePath -> [FilePath] -> Action ()
-mergeB0s out b0s = unit $ command [] "fslmerge" (["-t", out] ++ b0s)
+mergeVols :: FilePath -> [FilePath] -> Action ()
+mergeVols out vols = unit $ command [] "fslmerge" (["-t", out] ++ vols)
+
+tobval :: FilePath -> FilePath
+tobval f = replaceExtension' f "bval"
+
+tobvec :: FilePath -> FilePath
+tobvec f = replaceExtension' f "bvec"
+
+readDWIBval :: DWI -> Action [Int]
+readDWIBval dwi = readbval (replaceExtension' f "bval")
+  where f = filepath dwi
+
+-- readDWIBvec :: DWI -> Action [Dir]
+-- readDWIBvec dwi = readbvec (replaceExtension' f "bvec")
+--   where f = filepath dwi
+
+-- readArrayFiles :: Read a => [FilePath] -> Action [a]
+-- readArrayFiles fs = concat <$> (traverse readArrayFile fs)
+
+mergebvals :: FilePath -> [FilePath] -> Action ()
+mergebvals out = readbvals >=> writebval out
+  where
+    readbvals fs = concat <$> (traverse readbval fs)
+
+mergebvecs :: FilePath -> [FilePath] -> Action ()
+mergebvecs out = readbvecs >=> writebvec out
+  where
+    readbvecs fs = concat <$> (traverse readbvec fs)
+
+readbvec :: FilePath ->  Action [Dir]
+readbvec f = toVecs <$> (map toArr) <$> readFileLines f
+  where
+    toVecs [v1,v2,v3] = (zipWith3 Dir) v1 v2 v3
+    toArr = map read . words
+
+writebvec :: FilePath -> [Dir] -> Action ()
+writebvec f dirs = writeFile' f $ intercalate "\n" $ map show dirs
 
 main :: IO ()
 main = shakeArgs shakeOptions{shakeFiles="build"} $ do
     want ["build/001/eddy/SeriesVolNum.csv"]
-    want ["build/topup/Pos_b0.nii.gz"]
+    want ["build/topup/Pos_Neg.nii.gz"]
 
     phony "clean" $ do
         putNormal "Cleaning files in build"
@@ -103,15 +153,50 @@ main = shakeArgs shakeOptions{shakeFiles="build"} $ do
         [] -> error "No pairs of phase encoding directions have been found, at least one is needed"
         _ -> writeFile' out csv
 
+    "build/topup/Pos_Neg.nii.gz" %> \out -> do
+      let vols =  ["build/topup/Pos.nii.gz", "build/topup/Neg.nii.gz"]
+      let b0s =  ["build/topup/Pos_b0.nii.gz", "build/topup/Neg_b0.nii.gz"]
+      let bvals = map tobval vols
+      let bvecs = map tobvec vols
+      need $ vols ++ b0s ++ bvals ++ bvecs
+      mergeVols out vols
+      mergeVols (replaceExtension' out "_b0.nii.gz") b0s
+      mergebvals (tobval out) bvals
+      mergebvecs (tobvec out) bvecs
+
+    ["build/topup/Neg.nii.gz",
+     "build/topup/Neg.bval",
+     "build/topup/Neg.bvec"] *>> \[outvol, outbval, outbvec] -> do
+      need $ aps ++ ap_bvals ++ ap_bvecs
+      mergebvals outbval ap_bvals
+      mergebvecs outbvec ap_bvecs
+      mergeVols outvol aps
+
+    ["build/topup/Pos.nii.gz",
+     "build/topup/Pos.bval",
+     "build/topup/Pos.bvec"] *>> \[outvol, outbval, outbvec] -> do
+      need $ pas ++ pa_bvals ++ pa_bvecs
+      mergebvals outbval pa_bvals
+      mergebvecs outbvec pa_bvecs
+      mergeVols outvol pas
+
     "build/topup/Pos_b0.nii.gz" %> \out -> do
       need $ pa_bvals ++ pas
       let pa = head pas
       let bval = head pa_bvals
-      bValues <- readArrayFile bval
-      putNormal $ show (findIndices (< b0maxbval) bValues)
+      bValues <- readbval bval
+      putNormal $ "Found b0's at indices: " ++ show (findIndices (< b0maxbval) bValues)
       b0s <- extractB0s (PE1 pa) bValues b0maxbval
-      mergeB0s out b0s
+      mergeVols out b0s
 
+    "build/topup/Neg_b0.nii.gz" %> \out -> do
+      need $ ap_bvals ++ aps
+      let ap = head aps
+      let bval = head ap_bvals
+      bValues <- readbval bval
+      putNormal $ "Found b0's at indices: " ++ show (findIndices (< b0maxbval) bValues)
+      b0s <- extractB0s (PE1 ap) bValues b0maxbval
+      mergeVols out b0s
 
 
 
