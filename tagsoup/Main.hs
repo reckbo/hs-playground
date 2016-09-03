@@ -3,6 +3,8 @@ import           Data.Time
 import           Text.HandsomeSoup
 import           Text.XML.HXT.Core
 import           Data.Tree.NTree.TypeDefs
+import Data.List.Split
+import Data.List
 
 trim :: String -> String
 trim = unwords . words
@@ -40,9 +42,16 @@ scoringTableArr = (css "table:nth-child(8)") >>>
                   css "tr" >>>
                   listA scoringLineArr
 
-main = do
+getScore = do
   html <- readFile "test2.html"
   let doc = readString [withParseHTML yes, withWarnings no] html
   -- r <- runX $ doc >>> matchInfoArr
   r <- runX $ doc >>> scoringTableArr
-  print r
+  let
+    dropLast = reverse . tail . reverse
+    r' = tail . tail . dropLast $ r  -- last and first 2 rows
+    p = and . map ("quarter" `isInfixOf`)
+    goals = wordsBy p r'
+    quarters = filter p r'
+  return $ zip quarters goals
+  -- return $ quarters
