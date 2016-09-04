@@ -17,6 +17,7 @@ data MatchInfo =
 
 type Player = String
 type Team = String
+type Time = Int
 
 data ScoreType = Goal | Behind | RushedBehind
   deriving Show
@@ -30,10 +31,15 @@ data Teams = Teams
 
 data ScoringEvent = ScoringEvent
   { teamType :: TeamType
-  , time :: Int
+  , time :: Time
   , scoreType :: ScoreType
   , scorer :: Maybe Player
   }
+  deriving Show
+
+data Quarter = Quarter
+  { qnum :: Int
+  , qtime :: Time }
   deriving Show
 
 readScoringEvent :: [String] -> ScoringEvent
@@ -95,13 +101,20 @@ scoringTableTeamsArr =
   //> getText)
   >. (liftA2 (,) head last)
 
-readTime :: String -> Int
+readTime :: String -> Time
 readTime s =
   let
     rd = read :: String -> Int
     [min,sec] = rd . init <$> words s
   in
     60*min + sec
+
+readQuarterTime :: String -> Time
+readQuarterTime = readTime . striphead . striptail
+  where
+    striphead = tail . dropWhile (/='(')
+    striptail = reverse. tail . dropWhile (/=')') . reverse
+
 getScore = do
   html <- readFile "test.html"
   let doc = readString [withParseHTML yes, withWarnings no] html
@@ -113,6 +126,7 @@ getScore = do
     r' = tail . tail . init $ r  -- last and first 2 rows
     pred = and . map ("quarter" `isInfixOf`)
     events = (fmap readScoringEvent) <$> wordsBy pred r'
-    quarters = filter pred r'
+    quarterDescrips = concat $ filter pred r'
+    quarters = zipWith Quarter [1..] (map readQuarterTime quarterDescrips)
   return $ zip quarters events
   -- return r
