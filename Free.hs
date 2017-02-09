@@ -40,7 +40,7 @@ and e e' = Fx $ And e e'
 imp e e' = Fx $ Imp e e'
 var      = Fx . Var
 
-type Assignments a = [(Char, a)]
+type AssignmentMap a = [(Char, a)]
 data Ops a = Ops
     { _and :: a -> a -> a
     , _or :: a -> a -> a
@@ -48,7 +48,7 @@ data Ops a = Ops
     , _not :: a -> a
     }
 
-mkAlgebra :: Ops a -> Assignments a -> PropositionalAlgebra a
+mkAlgebra :: Ops a -> AssignmentMap a -> PropositionalAlgebra a
 mkAlgebra Ops{..} as = alg
   where alg (Var b)     = b' where Just b' = lookup b as
         alg (And b b')  = _and b b'
@@ -57,7 +57,7 @@ mkAlgebra Ops{..} as = alg
         alg (Not b)     = _not b
 
 
-interpret :: Ops a -> Assignments a -> Expression -> a
+interpret :: Ops a -> AssignmentMap a -> Expression -> a
 interpret ops as = cata (mkAlgebra ops as)
 
 
@@ -80,6 +80,7 @@ classicalOps =
       ,_imp = \e e' -> Prelude.not e || e'
       ,_not = Prelude.not}
 
+
 -- Test
 
 example_expressions :: [Expression]
@@ -93,14 +94,14 @@ example_expressions =
 test :: IO ()
 test =
   do let vars = ['a' .. 'd']
-         symbols = map (\c -> (c,[c])) vars
+         symbolMap = map (\c -> (c,[c])) vars
          toStr = map (fmap show)
          print = putStr . unlines
 
-     print $ map (interpret printerOps symbols) example_expressions
+     print $ map (interpret printerOps symbolMap) example_expressions
 
      putStrLn "# Classical interpretation:"
 
-     let bools = zip vars [True,True,False,True]
-     print $ map (interpret printerOps (toStr bools)) example_expressions
-     print $ map (show . interpret classicalOps bools) example_expressions
+     let boolMap = zip vars [True,True,False,True]
+     print $ map (interpret printerOps (toStr boolMap)) example_expressions
+     print $ map (show . interpret classicalOps boolMap) example_expressions
